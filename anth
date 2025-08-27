@@ -1,0 +1,57 @@
+#!/bin/bash
+
+source cli-v1.sh
+
+# Check if there are staged changes
+if ! git diff --cached --quiet; then
+    # Get the staged diff
+    DIFF_CONTENT=$(git diff --cached)
+
+    # Check if diff is empty
+    if [[ -z "$DIFF_CONTENT" ]]; then
+        echo "No staged changes to commit."
+        exit 1
+    fi
+
+    # Prepare prompt for Claude Sonnet
+    PROMPT="Write a concise and descriptive git commit message for the following diff:\n\n$DIFF_CONTENT"
+
+    # Call Claude Sonnet via Anthropic API (assumes API key is set in $ANTHROPIC_API_KEY)
+    RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: $ANTHROPIC_API_KEY" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d '{
+        "model": "claude-3-sonnet-20240229",
+        "max_tokens": 100,
+        "messages": [
+          {"role": "user", "content": "'"${PROMPT//$'\n'/\\n}"'"}
+        ]
+      }')
+
+    # Extract the commit message from the response (assumes response contains "content")
+    COMMIT_MSG=$(echo "$RESPONSE" | grep -o '"content":[^}]*' | sed 's/"content":"\([^"]*\)".*/\1/' | sed 's/\\n/\n/g')
+
+    # If extraction failed, print error
+    if [[ -z "$COMMIT_MSG" ]]; then
+        echo "Failed to get commit message from Claude Sonnet."
+        exit 1
+    fi
+
+    # Show the commit message and ask for confirmation
+    echo "Suggested commit message:"
+    echo "------------------------"
+    echo "$COMMIT_MSG"
+    echo "------------------------"
+    read -p "Use this commit message? [Y/n]: " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Nn] ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    # Commit with the generated message
+    git commit -m "$COMMIT_MSG"
+else
+    echo "No staged changes to commit."
+    exit 1
+fi
